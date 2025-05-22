@@ -1,0 +1,1530 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lecteur M3U8 Avancé</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+
+        /* Video player styling */
+        .video-container {
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 aspect ratio */
+            height: 0;
+            overflow: hidden;
+            background: #000;
+        }
+        .video-container video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Custom controls */
+        .controls-container {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(transparent, rgba(0,0,0,0.7));
+            transition: opacity 0.3s;
+        }
+        .progress-bar {
+            height: 4px;
+            background: rgba(255,255,255,0.2);
+            cursor: pointer;
+        }
+        .progress-filled {
+            height: 100%;
+            background: #3b82f6;
+            transition: width 0.1s;
+        }
+        .volume-slider {
+            width: 80px;
+        }
+
+        /* Animations */
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+
+        /* Modal transitions */
+        .modal-enter {
+            opacity: 0;
+            transform: scale(0.95);
+        }
+        .modal-enter-active {
+            opacity: 1;
+            transform: scale(1);
+            transition: opacity 200ms, transform 200ms;
+        }
+        .modal-exit {
+            opacity: 1;
+        }
+        .modal-exit-active {
+            opacity: 0;
+            transform: scale(0.95);
+            transition: opacity 200ms, transform 200ms;
+        }
+
+        /* Buffer indicator */
+        .buffer-indicator {
+            position: absolute;
+            bottom: 50px;
+            left: 0;
+            height: 3px;
+            background: rgba(255,255,255,0.2);
+            width: 100%;
+        }
+        .buffer-level {
+            height: 100%;
+            background: rgba(255,255,255,0.6);
+        }
+
+        /* Quality selector */
+        .quality-menu {
+            position: absolute;
+            bottom: 40px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            border-radius: 4px;
+            padding: 8px 0;
+            min-width: 120px;
+            z-index: 10;
+        }
+        .quality-option {
+            padding: 6px 12px;
+            cursor: pointer;
+        }
+        .quality-option:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        .quality-option.active {
+            color: #3b82f6;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white">
+    <!-- Header -->
+    <header class="bg-slate-800 p-4 flex justify-between items-center border-b border-slate-700">
+        <div class="flex items-center space-x-2">
+            <i class="fas fa-satellite-dish text-blue-500 text-2xl"></i>
+            <h1 class="text-xl font-bold">Lecteur M3U8</h1>
+        </div>
+        <div class="flex items-center space-x-4">
+            <button id="fullscreen-header-btn" class="p-2 rounded-full hover:bg-slate-700">
+                <i class="fas fa-expand"></i>
+            </button>
+            <button id="settings-btn" class="p-2 rounded-full hover:bg-slate-700">
+                <i class="fas fa-cog"></i>
+            </button>
+            <div id="auth-section">
+                <button id="login-btn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-md">
+                    Connexion
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="container mx-auto px-4 py-6">
+        <!-- Quick Play Section -->
+        <section class="mb-6">
+            <div class="bg-slate-800 rounded-lg p-4 shadow-lg">
+                <h2 class="text-lg font-bold mb-3 flex items-center">
+                    <i class="fas fa-bolt text-yellow-400 mr-2"></i> Lecture rapide
+                </h2>
+                <div class="flex">
+                    <input 
+                        id="stream-url" 
+                        type="text" 
+                        placeholder="Coller un lien .m3u8 ici" 
+                        class="flex-1 px-4 py-2 rounded-l-md bg-slate-700 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                    <button 
+                        id="play-btn" 
+                        class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-r-md"
+                    >
+                        <i class="fas fa-play mr-1"></i> Lire
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Video Player Section -->
+        <section class="mb-8">
+            <div class="flex flex-col md:flex-row gap-6">
+                <!-- Video Player -->
+                <div class="flex-1">
+                    <div class="bg-slate-800 rounded-lg overflow-hidden shadow-lg">
+                        <!-- Video Container -->
+                        <div class="video-container relative group">
+                            <video id="video-player" class="w-full"></video>
+                            
+                            <!-- Loading Overlay -->
+                            <div id="loading-overlay" class="absolute inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden">
+                                <div class="text-center">
+                                    <i class="fas fa-circle-notch animate-spin text-4xl text-blue-500 mb-2"></i>
+                                    <p>Chargement du flux...</p>
+                                </div>
+                            </div>
+
+                            <!-- Error Overlay -->
+                            <div id="error-overlay" class="absolute inset-0 bg-black bg-opacity-70 flex items-center justify-center hidden">
+                                <div class="text-center p-4 max-w-md">
+                                    <i class="fas fa-exclamation-triangle text-4xl text-red-500 mb-2"></i>
+                                    <h3 class="text-xl font-bold mb-2">Erreur de flux</h3>
+                                    <p id="error-message" class="mb-4">Une erreur est survenue lors du chargement du flux.</p>
+                                    <button id="retry-btn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-md">
+                                        <i class="fas fa-redo mr-1"></i> Réessayer
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Buffer Indicator -->
+                            <div class="buffer-indicator hidden">
+                                <div class="buffer-level" style="width: 0%"></div>
+                            </div>
+
+                            <!-- Controls -->
+                            <div class="controls-container opacity-0 group-hover:opacity-100">
+                                <!-- Progress Bar -->
+                                <div class="progress-bar">
+                                    <div id="progress-filled" class="progress-filled" style="width: 0%"></div>
+                                </div>
+                                
+                                <!-- Bottom Controls -->
+                                <div class="flex items-center justify-between px-4 py-2">
+                                    <div class="flex items-center space-x-4">
+                                        <!-- Play/Pause -->
+                                        <button id="play-pause-btn" class="text-white hover:text-blue-400">
+                                            <i class="fas fa-play"></i>
+                                        </button>
+                                        
+                                        <!-- Volume -->
+                                        <div class="flex items-center space-x-2">
+                                            <button id="mute-btn" class="text-white hover:text-blue-400">
+                                                <i class="fas fa-volume-up"></i>
+                                            </button>
+                                            <input 
+                                                id="volume-slider" 
+                                                type="range" 
+                                                min="0" 
+                                                max="1" 
+                                                step="0.01" 
+                                                value="1" 
+                                                class="volume-slider"
+                                            >
+                                        </div>
+                                        
+                                        <!-- Time Display -->
+                                        <div class="text-sm">
+                                            <span id="current-time">00:00</span> / 
+                                            <span id="duration">00:00</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="flex items-center space-x-4">
+                                        <!-- Quality -->
+                                        <div class="relative">
+                                            <button id="quality-btn" class="text-white hover:text-blue-400">
+                                                <i class="fas fa-cog"></i> Qualité
+                                            </button>
+                                            <div id="quality-menu" class="quality-menu hidden">
+                                                <!-- Quality options will be added here dynamically -->
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Subtitles (placeholder) -->
+                                        <button class="text-white hover:text-blue-400 opacity-50 cursor-not-allowed">
+                                            <i class="fas fa-closed-captioning"></i>
+                                        </button>
+                                        
+                                        <!-- Fullscreen -->
+                                        <button id="fullscreen-btn" class="text-white hover:text-blue-400">
+                                            <i class="fas fa-expand"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Playlist Section -->
+                <div class="w-full md:w-80 bg-slate-800 rounded-lg shadow-lg overflow-hidden">
+                    <div class="p-4 bg-slate-700 border-b border-slate-600">
+                        <h2 class="text-lg font-bold flex items-center">
+                            <i class="fas fa-list mr-2"></i> Playlist
+                        </h2>
+                    </div>
+                    
+                    <!-- Add Stream Form -->
+                    <div class="p-4 border-b border-slate-700">
+                        <div class="mb-2">
+                            <input 
+                                id="stream-name" 
+                                type="text" 
+                                placeholder="Nom du flux" 
+                                class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            >
+                        </div>
+                        <div class="mb-2">
+                            <input 
+                                id="stream-url-playlist" 
+                                type="text" 
+                                placeholder="URL .m3u8" 
+                                class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            >
+                        </div>
+                        <button 
+                            id="add-stream-btn" 
+                            class="w-full py-2 bg-blue-600 hover:bg-blue-700 rounded-md"
+                        >
+                            <i class="fas fa-plus mr-2"></i> Ajouter
+                        </button>
+                    </div>
+                    
+                    <!-- Playlist Actions -->
+                    <div class="p-2 flex space-x-2 border-b border-slate-700">
+                        <button 
+                            id="clear-playlist-btn" 
+                            class="flex-1 py-1 bg-red-600 hover:bg-red-700 rounded-md text-sm"
+                        >
+                            <i class="fas fa-trash mr-1"></i> Vider
+                        </button>
+                        <button 
+                            id="save-playlist-btn" 
+                            class="flex-1 py-1 bg-green-600 hover:bg-green-700 rounded-md text-sm"
+                        >
+                            <i class="fas fa-save mr-1"></i> Sauvegarder
+                        </button>
+                        <button 
+                            id="rename-playlist-btn" 
+                            class="flex-1 py-1 bg-yellow-600 hover:bg-yellow-700 rounded-md text-sm"
+                        >
+                            <i class="fas fa-edit mr-1"></i> Renommer
+                        </button>
+                    </div>
+                    
+                    <!-- Playlist Items -->
+                    <div class="overflow-y-auto" style="max-height: 400px;">
+                        <ul id="playlist" class="divide-y divide-slate-700">
+                            <!-- Playlist items will be added here dynamically -->
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Stream Info Section -->
+        <section class="bg-slate-800 rounded-lg shadow-lg overflow-hidden mb-8">
+            <div class="p-4 bg-slate-700 border-b border-slate-600">
+                <h2 class="text-lg font-bold flex items-center">
+                    <i class="fas fa-info-circle mr-2"></i> Informations du flux
+                </h2>
+            </div>
+            
+            <div class="p-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <!-- Current Stream Info -->
+                    <div class="bg-slate-700 p-4 rounded-lg">
+                        <h3 class="font-bold mb-2 text-blue-400">Flux actuel</h3>
+                        <div class="space-y-2">
+                            <p><span class="font-semibold">Nom:</span> <span id="current-stream-name">-</span></p>
+                            <p><span class="font-semibold">URL:</span> <span id="current-stream-url" class="truncate block">-</span></p>
+                            <p><span class="font-semibold">Statut:</span> <span id="current-stream-status" class="text-green-400">Inactif</span></p>
+                            <p><span class="font-semibold">Type:</span> HLS</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Network Stats -->
+                    <div class="bg-slate-700 p-4 rounded-lg">
+                        <h3 class="font-bold mb-2 text-blue-400">Statuts réseau</h3>
+                        <div class="space-y-2">
+                            <p><span class="font-semibold">Ping:</span> <span id="network-ping">-</span> ms</p>
+                            <p><span class="font-semibold">Débit:</span> <span id="network-bitrate">-</span> kbps</p>
+                            <p><span class="font-semibold">Latence:</span> <span id="network-latency">-</span> s</p>
+                            <p><span class="font-semibold">Buffer:</span> <span id="network-buffered">0</span> s</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Stream Quality -->
+                    <div class="bg-slate-700 p-4 rounded-lg">
+                        <h3 class="font-bold mb-2 text-blue-400">Qualité</h3>
+                        <div class="space-y-2">
+                            <p><span class="font-semibold">Résolution:</span> <span id="stream-resolution">-</span></p>
+                            <p><span class="font-semibold">Codecs:</span> <span id="stream-codecs">-</span></p>
+                            <p><span class="font-semibold">Niveau:</span> <span id="stream-level">-</span></p>
+                            <p><span class="font-semibold">FPS:</span> <span id="stream-fps">-</span></p>
+                        </div>
+                    </div>
+                    
+                    <!-- Technical Info -->
+                    <div class="bg-slate-700 p-4 rounded-lg">
+                        <h3 class="font-bold mb-2 text-blue-400">Technique</h3>
+                        <div class="space-y-2">
+                            <p><span class="font-semibold">Technologie:</span> <span id="stream-engine">-</span></p>
+                            <p><span class="font-semibold">Fragments:</span> <span id="stream-fragments">0</span></p>
+                            <p><span class="font-semibold">Frames perdues:</span> <span id="stream-dropped">0</span></p>
+                            <p><span class="font-semibold">Santé du buffer:</span> <span id="buffer-health">0</span>%</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Login Modal -->
+    <div id="login-modal" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 hidden">
+        <div class="bg-slate-800 rounded-lg shadow-xl w-full max-w-md">
+            <div class="p-4 border-b border-slate-700 flex justify-between items-center">
+                <h3 class="text-xl font-bold">Connexion</h3>
+                <button id="close-login-modal" class="text-slate-400 hover:text-white">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="p-6">
+                <form id="login-form">
+                    <div class="mb-4">
+                        <label for="login-email" class="block mb-2">Email</label>
+                        <input 
+                            id="login-email" 
+                            type="email" 
+                            required 
+                            class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                    </div>
+                    <div class="mb-6">
+                        <label for="login-password" class="block mb-2">Mot de passe</label>
+                        <input 
+                            id="login-password" 
+                            type="password" 
+                            required 
+                            class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                    </div>
+                    <button type="submit" class="w-full py-2 bg-blue-600 hover:bg-blue-700 rounded-md">
+                        Se connecter
+                    </button>
+                </form>
+                
+                <div class="mt-4 text-center">
+                    <p class="text-slate-400">Pas de compte ? 
+                        <button id="show-register-btn" class="text-blue-400 hover:text-blue-300">S'inscrire</button>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Register Modal -->
+    <div id="register-modal" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 hidden">
+        <div class="bg-slate-800 rounded-lg shadow-xl w-full max-w-md">
+            <div class="p-4 border-b border-slate-700 flex justify-between items-center">
+                <h3 class="text-xl font-bold">Inscription</h3>
+                <button id="close-register-modal" class="text-slate-400 hover:text-white">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="p-6">
+                <form id="register-form">
+                    <div class="mb-4">
+                        <label for="register-name" class="block mb-2">Pseudo</label>
+                        <input 
+                            id="register-name" 
+                            type="text" 
+                            required 
+                            class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                    </div>
+                    <div class="mb-4">
+                        <label for="register-email" class="block mb-2">Email</label>
+                        <input 
+                            id="register-email" 
+                            type="email" 
+                            required 
+                            class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                    </div>
+                    <div class="mb-4">
+                        <label for="register-password" class="block mb-2">Mot de passe</label>
+                        <input 
+                            id="register-password" 
+                            type="password" 
+                            required 
+                            class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                    </div>
+                    <div class="mb-6">
+                        <label for="register-confirm" class="block mb-2">Confirmer mot de passe</label>
+                        <input 
+                            id="register-confirm" 
+                            type="password" 
+                            required 
+                            class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        >
+                    </div>
+                    <button type="submit" class="w-full py-2 bg-blue-600 hover:bg-blue-700 rounded-md">
+                        S'inscrire
+                    </button>
+                </form>
+                
+                <div class="mt-4 text-center">
+                    <p class="text-slate-400">Déjà un compte ? 
+                        <button id="show-login-btn" class="text-blue-400 hover:text-blue-300">Se connecter</button>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 hidden">
+        <div class="bg-slate-800 rounded-lg shadow-xl w-full max-w-2xl">
+            <div class="p-4 border-b border-slate-700 flex justify-between items-center">
+                <h3 class="text-xl font-bold">Paramètres</h3>
+                <button id="close-settings-modal" class="text-slate-400 hover:text-white">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <div class="p-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Playback Settings -->
+                    <div>
+                        <h4 class="font-bold mb-4 text-blue-400 border-b border-slate-700 pb-2">
+                            <i class="fas fa-play-circle mr-2"></i> Lecture
+                        </h4>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <label for="autoplay-setting" class="cursor-pointer">Lecture automatique</label>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="autoplay-setting" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <label for="low-latency-setting" class="cursor-pointer">Mode basse latence</label>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="low-latency-setting" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <label for="auto-quality-setting" class="cursor-pointer">Qualité automatique</label>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="auto-quality-setting" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Network Settings -->
+                    <div>
+                        <h4 class="font-bold mb-4 text-blue-400 border-b border-slate-700 pb-2">
+                            <i class="fas fa-network-wired mr-2"></i> Réseau
+                        </h4>
+                        <div class="space-y-4">
+                            <div>
+                                <label for="buffer-size-setting" class="block mb-2">Taille max du buffer (MB)</label>
+                                <input 
+                                    id="buffer-size-setting" 
+                                    type="number" 
+                                    min="1" 
+                                    max="100" 
+                                    value="10" 
+                                    class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                >
+                            </div>
+                            <div>
+                                <label for="buffer-duration-setting" class="block mb-2">Durée max du buffer (sec)</label>
+                                <input 
+                                    id="buffer-duration-setting" 
+                                    type="number" 
+                                    min="1" 
+                                    max="60" 
+                                    value="30" 
+                                    class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                >
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Appearance Settings -->
+                    <div>
+                        <h4 class="font-bold mb-4 text-blue-400 border-b border-slate-700 pb-2">
+                            <i class="fas fa-palette mr-2"></i> Apparence
+                        </h4>
+                        <div class="space-y-4">
+                            <div>
+                                <label for="theme-setting" class="block mb-2">Thème</label>
+                                <select 
+                                    id="theme-setting" 
+                                    class="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                >
+                                    <option value="dark">Sombre</option>
+                                    <option value="light">Clair</option>
+                                    <option value="system">Système</option>
+                                </select>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <label for="controls-setting" class="cursor-pointer">Toujours afficher les contrôles</label>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="controls-setting" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Advanced Settings -->
+                    <div>
+                        <h4 class="font-bold mb-4 text-blue-400 border-b border-slate-700 pb-2">
+                            <i class="fas fa-cogs mr-2"></i> Avancé
+                        </h4>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <label for="native-hls-setting" class="cursor-pointer">HLS natif (Safari)</label>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="native-hls-setting" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <label for="stats-setting" class="cursor-pointer">Afficher les stats</label>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="stats-setting" class="sr-only peer" checked>
+                                    <div class="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-6 pt-4 border-t border-slate-700 flex justify-end space-x-3">
+                    <button id="reset-settings-btn" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-md">
+                        Réinitialiser
+                    </button>
+                    <button id="save-settings-btn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-md">
+                        Sauvegarder
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Protocol Warning -->
+    <div id="file-protocol-warning" class="fixed bottom-4 left-4 bg-yellow-600 text-white px-4 py-2 rounded-md shadow-lg hidden">
+        <div class="flex items-center">
+            <i class="fas fa-exclamation-triangle mr-2"></i>
+            <span>Attention: Exécution en mode fichier (file://). Certaines fonctionnalités peuvent ne pas fonctionner.</span>
+        </div>
+    </div>
+
+    <script>
+        // Check if running in file protocol
+        if (window.location.protocol === 'file:') {
+            document.getElementById('file-protocol-warning').classList.remove('hidden');
+        }
+
+        // DOM Elements
+        const videoPlayer = document.getElementById('video-player');
+        const streamUrlInput = document.getElementById('stream-url');
+        const playBtn = document.getElementById('play-btn');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const errorOverlay = document.getElementById('error-overlay');
+        const errorMessage = document.getElementById('error-message');
+        const retryBtn = document.getElementById('retry-btn');
+        const playPauseBtn = document.getElementById('play-pause-btn');
+        const muteBtn = document.getElementById('mute-btn');
+        const volumeSlider = document.getElementById('volume-slider');
+        const progressFilled = document.getElementById('progress-filled');
+        const currentTimeDisplay = document.getElementById('current-time');
+        const durationDisplay = document.getElementById('duration');
+        const qualityBtn = document.getElementById('quality-btn');
+        const qualityMenu = document.getElementById('quality-menu');
+        const fullscreenBtn = document.getElementById('fullscreen-btn');
+        const fullscreenHeaderBtn = document.getElementById('fullscreen-header-btn');
+        const controlsContainer = document.querySelector('.controls-container');
+        const bufferIndicator = document.querySelector('.buffer-indicator');
+        const bufferLevel = document.querySelector('.buffer-level');
+        
+        // Playlist Elements
+        const streamNameInput = document.getElementById('stream-name');
+        const streamUrlPlaylistInput = document.getElementById('stream-url-playlist');
+        const addStreamBtn = document.getElementById('add-stream-btn');
+        const clearPlaylistBtn = document.getElementById('clear-playlist-btn');
+        const savePlaylistBtn = document.getElementById('save-playlist-btn');
+        const renamePlaylistBtn = document.getElementById('rename-playlist-btn');
+        const playlist = document.getElementById('playlist');
+        
+        // Info Elements
+        const currentStreamName = document.getElementById('current-stream-name');
+        const currentStreamUrl = document.getElementById('current-stream-url');
+        const currentStreamStatus = document.getElementById('current-stream-status');
+        const networkPing = document.getElementById('network-ping');
+        const networkBitrate = document.getElementById('network-bitrate');
+        const networkLatency = document.getElementById('network-latency');
+        const networkBuffered = document.getElementById('network-buffered');
+        const streamResolution = document.getElementById('stream-resolution');
+        const streamCodecs = document.getElementById('stream-codecs');
+        const streamLevel = document.getElementById('stream-level');
+        const streamFps = document.getElementById('stream-fps');
+        const streamEngine = document.getElementById('stream-engine');
+        const streamFragments = document.getElementById('stream-fragments');
+        const streamDropped = document.getElementById('stream-dropped');
+        const bufferHealth = document.getElementById('buffer-health');
+        
+        // Modal Elements
+        const loginBtn = document.getElementById('login-btn');
+        const loginModal = document.getElementById('login-modal');
+        const closeLoginModal = document.getElementById('close-login-modal');
+        const loginForm = document.getElementById('login-form');
+        const showRegisterBtn = document.getElementById('show-register-btn');
+        const registerModal = document.getElementById('register-modal');
+        const closeRegisterModal = document.getElementById('close-register-modal');
+        const registerForm = document.getElementById('register-form');
+        const showLoginBtn = document.getElementById('show-login-btn');
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsModal = document.getElementById('settings-modal');
+        const closeSettingsModal = document.getElementById('close-settings-modal');
+        const saveSettingsBtn = document.getElementById('save-settings-btn');
+        const resetSettingsBtn = document.getElementById('reset-settings-btn');
+        const authSection = document.getElementById('auth-section');
+        
+        // Settings Elements
+        const autoplaySetting = document.getElementById('autoplay-setting');
+        const lowLatencySetting = document.getElementById('low-latency-setting');
+        const autoQualitySetting = document.getElementById('auto-quality-setting');
+        const bufferSizeSetting = document.getElementById('buffer-size-setting');
+        const bufferDurationSetting = document.getElementById('buffer-duration-setting');
+        const themeSetting = document.getElementById('theme-setting');
+        const controlsSetting = document.getElementById('controls-setting');
+        const nativeHlsSetting = document.getElementById('native-hls-setting');
+        const statsSetting = document.getElementById('stats-setting');
+        
+        // State
+        let hls = null;
+        let isPlaying = false;
+        let isMuted = false;
+        let currentVolume = 1;
+        let currentQuality = 'auto';
+        let playlistItems = [];
+        let currentStreamIndex = -1;
+        let user = null;
+        let settings = {
+            autoplay: false,
+            lowLatency: false,
+            autoQuality: true,
+            bufferSize: 10,
+            bufferDuration: 30,
+            theme: 'dark',
+            alwaysShowControls: false,
+            preferNativeHLS: false,
+            showStats: true
+        };
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            // Load settings from localStorage
+            loadSettings();
+            applySettings();
+            
+            // Load playlist from localStorage
+            loadPlaylist();
+            
+            // Load user session if exists
+            loadUserSession();
+            
+            // Setup event listeners
+            setupEventListeners();
+            
+            // Check for native HLS support (Safari)
+            if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+                streamEngine.textContent = 'HLS natif';
+            } else if (Hls.isSupported()) {
+                streamEngine.textContent = 'HLS.js';
+            } else {
+                streamEngine.textContent = 'Non supporté';
+                showError('Votre navigateur ne supporte pas la lecture de flux HLS.');
+            }
+        });
+        
+        // Functions
+        function loadSettings() {
+            const savedSettings = localStorage.getItem('hlsPlayerSettings');
+            if (savedSettings) {
+                settings = JSON.parse(savedSettings);
+                
+                // Update UI to reflect loaded settings
+                autoplaySetting.checked = settings.autoplay;
+                lowLatencySetting.checked = settings.lowLatency;
+                autoQualitySetting.checked = settings.autoQuality;
+                bufferSizeSetting.value = settings.bufferSize;
+                bufferDurationSetting.value = settings.bufferDuration;
+                themeSetting.value = settings.theme;
+                controlsSetting.checked = settings.alwaysShowControls;
+                nativeHlsSetting.checked = settings.preferNativeHLS;
+                statsSetting.checked = settings.showStats;
+            }
+        }
+        
+        function saveSettings() {
+            localStorage.setItem('hlsPlayerSettings', JSON.stringify(settings));
+        }
+        
+        function applySettings() {
+            // Apply theme
+            document.body.className = `bg-${settings.theme === 'light' ? 'gray-100' : 'slate-900'} text-${settings.theme === 'light' ? 'gray-900' : 'white'}`;
+            
+            // Apply controls visibility
+            if (settings.alwaysShowControls) {
+                controlsContainer.classList.remove('opacity-0');
+            } else {
+                controlsContainer.classList.add('opacity-0');
+            }
+            
+            // Apply stats visibility
+            const statsSection = document.querySelector('section.bg-slate-800.rounded-lg.shadow-lg.overflow-hidden.mb-8');
+            if (statsSection) {
+                statsSection.style.display = settings.showStats ? 'block' : 'none';
+            }
+        }
+        
+        function loadPlaylist() {
+            const savedPlaylist = localStorage.getItem('hlsPlayerPlaylist');
+            if (savedPlaylist) {
+                playlistItems = JSON.parse(savedPlaylist);
+                renderPlaylist();
+            }
+        }
+        
+        function savePlaylist() {
+            localStorage.setItem('hlsPlayerPlaylist', JSON.stringify(playlistItems));
+        }
+        
+        function loadUserSession() {
+            const savedUser = localStorage.getItem('hlsPlayerUser');
+            if (savedUser) {
+                user = JSON.parse(savedUser);
+                updateAuthUI();
+            }
+        }
+        
+        function saveUserSession() {
+            if (user) {
+                localStorage.setItem('hlsPlayerUser', JSON.stringify(user));
+            } else {
+                localStorage.removeItem('hlsPlayerUser');
+            }
+        }
+        
+        function updateAuthUI() {
+            if (user) {
+                authSection.innerHTML = `
+                    <div class="flex items-center space-x-2">
+                        <span>Bonjour, ${user.name}</span>
+                        <button id="logout-btn" class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-md">
+                            Déconnexion
+                        </button>
+                    </div>
+                `;
+                document.getElementById('logout-btn').addEventListener('click', logout);
+            } else {
+                authSection.innerHTML = `
+                    <button id="login-btn" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-md">
+                        Connexion
+                    </button>
+                `;
+                document.getElementById('login-btn').addEventListener('click', () => {
+                    loginModal.classList.remove('hidden');
+                });
+            }
+        }
+        
+        function setupEventListeners() {
+            // Video player events
+            videoPlayer.addEventListener('play', () => {
+                isPlaying = true;
+                playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>';
+                currentStreamStatus.textContent = 'En lecture';
+                currentStreamStatus.className = 'text-green-400';
+            });
+            
+            videoPlayer.addEventListener('pause', () => {
+                isPlaying = false;
+                playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+                currentStreamStatus.textContent = 'En pause';
+                currentStreamStatus.className = 'text-yellow-400';
+            });
+            
+            videoPlayer.addEventListener('timeupdate', updateProgress);
+            videoPlayer.addEventListener('durationchange', updateDuration);
+            videoPlayer.addEventListener('volumechange', updateVolume);
+            videoPlayer.addEventListener('waiting', () => {
+                loadingOverlay.classList.remove('hidden');
+                currentStreamStatus.textContent = 'Buffering...';
+                currentStreamStatus.className = 'text-yellow-400';
+            });
+            
+            videoPlayer.addEventListener('playing', () => {
+                loadingOverlay.classList.add('hidden');
+                currentStreamStatus.textContent = 'En lecture';
+                currentStreamStatus.className = 'text-green-400';
+            });
+            
+            videoPlayer.addEventListener('error', () => {
+                showError('Erreur de lecture vidéo.');
+            });
+            
+            // Play button
+            playBtn.addEventListener('click', () => {
+                const url = streamUrlInput.value.trim();
+                if (url) {
+                    playStream(url, 'Lecture rapide');
+                }
+            });
+            
+            // Retry button
+            retryBtn.addEventListener('click', () => {
+                if (currentStreamIndex >= 0) {
+                    const item = playlistItems[currentStreamIndex];
+                    playStream(item.url, item.name);
+                } else {
+                    const url = streamUrlInput.value.trim();
+                    if (url) {
+                        playStream(url, 'Lecture rapide');
+                    }
+                }
+            });
+            
+            // Play/Pause button
+            playPauseBtn.addEventListener('click', togglePlayPause);
+            
+            // Mute button
+            muteBtn.addEventListener('click', toggleMute);
+            
+            // Volume slider
+            volumeSlider.addEventListener('input', (e) => {
+                videoPlayer.volume = e.target.value;
+                videoPlayer.muted = false;
+                isMuted = false;
+                muteBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+            });
+            
+            // Progress bar
+            const progressBar = document.querySelector('.progress-bar');
+            progressBar.addEventListener('click', (e) => {
+                const rect = progressBar.getBoundingClientRect();
+                const pos = (e.clientX - rect.left) / rect.width;
+                videoPlayer.currentTime = pos * videoPlayer.duration;
+            });
+            
+            // Quality button
+            qualityBtn.addEventListener('click', toggleQualityMenu);
+            
+            // Fullscreen buttons
+            fullscreenBtn.addEventListener('click', toggleFullscreen);
+            fullscreenHeaderBtn.addEventListener('click', toggleFullscreen);
+            
+            // Playlist events
+            addStreamBtn.addEventListener('click', addToPlaylist);
+            clearPlaylistBtn.addEventListener('click', clearPlaylist);
+            savePlaylistBtn.addEventListener('click', savePlaylist);
+            renamePlaylistBtn.addEventListener('click', renamePlaylist);
+            
+            // Modal events
+            loginBtn.addEventListener('click', () => {
+                loginModal.classList.remove('hidden');
+            });
+            
+            closeLoginModal.addEventListener('click', () => {
+                loginModal.classList.add('hidden');
+            });
+            
+            showRegisterBtn.addEventListener('click', () => {
+                loginModal.classList.add('hidden');
+                registerModal.classList.remove('hidden');
+            });
+            
+            closeRegisterModal.addEventListener('click', () => {
+                registerModal.classList.add('hidden');
+            });
+            
+            showLoginBtn.addEventListener('click', () => {
+                registerModal.classList.add('hidden');
+                loginModal.classList.remove('hidden');
+            });
+            
+            settingsBtn.addEventListener('click', () => {
+                settingsModal.classList.remove('hidden');
+            });
+            
+            closeSettingsModal.addEventListener('click', () => {
+                settingsModal.classList.add('hidden');
+            });
+            
+            // Form submissions
+            loginForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const email = document.getElementById('login-email').value;
+                const password = document.getElementById('login-password').value;
+                login(email, password);
+            });
+            
+            registerForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const name = document.getElementById('register-name').value;
+                const email = document.getElementById('register-email').value;
+                const password = document.getElementById('register-password').value;
+                const confirm = document.getElementById('register-confirm').value;
+                
+                if (password !== confirm) {
+                    alert('Les mots de passe ne correspondent pas!');
+                    return;
+                }
+                
+                register(name, email, password);
+            });
+            
+            // Settings events
+            saveSettingsBtn.addEventListener('click', () => {
+                // Update settings from UI
+                settings.autoplay = autoplaySetting.checked;
+                settings.lowLatency = lowLatencySetting.checked;
+                settings.autoQuality = autoQualitySetting.checked;
+                settings.bufferSize = parseInt(bufferSizeSetting.value);
+                settings.bufferDuration = parseInt(bufferDurationSetting.value);
+                settings.theme = themeSetting.value;
+                settings.alwaysShowControls = controlsSetting.checked;
+                settings.preferNativeHLS = nativeHlsSetting.checked;
+                settings.showStats = statsSetting.checked;
+                
+                saveSettings();
+                applySettings();
+                settingsModal.classList.add('hidden');
+                
+                // Reinitialize player with new settings if needed
+                if (hls) {
+                    playStream(currentStreamUrl.textContent, currentStreamName.textContent);
+                }
+            });
+            
+            resetSettingsBtn.addEventListener('click', () => {
+                if (confirm('Êtes-vous sûr de vouloir réinitialiser tous les paramètres?')) {
+                    // Reset to default settings
+                    settings = {
+                        autoplay: false,
+                        lowLatency: false,
+                        autoQuality: true,
+                        bufferSize: 10,
+                        bufferDuration: 30,
+                        theme: 'dark',
+                        alwaysShowControls: false,
+                        preferNativeHLS: false,
+                        showStats: true
+                    };
+                    
+                    // Update UI
+                    autoplaySetting.checked = settings.autoplay;
+                    lowLatencySetting.checked = settings.lowLatency;
+                    autoQualitySetting.checked = settings.autoQuality;
+                    bufferSizeSetting.value = settings.bufferSize;
+                    bufferDurationSetting.value = settings.bufferDuration;
+                    themeSetting.value = settings.theme;
+                    controlsSetting.checked = settings.alwaysShowControls;
+                    nativeHlsSetting.checked = settings.preferNativeHLS;
+                    statsSetting.checked = settings.showStats;
+                    
+                    saveSettings();
+                    applySettings();
+                }
+            });
+            
+            // Keyboard shortcuts
+            document.addEventListener('keydown', (e) => {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                
+                switch (e.key) {
+                    case ' ':
+                        // Space to play/pause
+                        e.preventDefault();
+                        togglePlayPause();
+                        break;
+                    case 'm':
+                        // M to mute/unmute
+                        toggleMute();
+                        break;
+                    case 'f':
+                        // F to toggle fullscreen
+                        toggleFullscreen();
+                        break;
+                    case 'ArrowLeft':
+                        // Left arrow to seek backward 5 seconds
+                        videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - 5);
+                        break;
+                    case 'ArrowRight':
+                        // Right arrow to seek forward 5 seconds
+                        videoPlayer.currentTime = Math.min(videoPlayer.duration, videoPlayer.currentTime + 5);
+                        break;
+                    case 'ArrowUp':
+                        // Up arrow to increase volume
+                        videoPlayer.volume = Math.min(1, videoPlayer.volume + 0.1);
+                        break;
+                    case 'ArrowDown':
+                        // Down arrow to decrease volume
+                        videoPlayer.volume = Math.max(0, videoPlayer.volume - 0.1);
+                        break;
+                }
+            });
+            
+            // Mouse movement to show/hide controls
+            videoPlayer.addEventListener('mousemove', () => {
+                controlsContainer.classList.remove('opacity-0');
+                clearTimeout(window.controlsTimeout);
+                
+                window.controlsTimeout = setTimeout(() => {
+                    if (!settings.alwaysShowControls && !videoPlayer.paused) {
+                        controlsContainer.classList.add('opacity-0');
+                    }
+                }, 3000);
+            });
+        }
+        
+        function playStream(url, name) {
+            // Clean up previous HLS instance if exists
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+            
+            // Reset UI
+            loadingOverlay.classList.remove('hidden');
+            errorOverlay.classList.add('hidden');
+            currentStreamName.textContent = name;
+            currentStreamUrl.textContent = url;
+            currentStreamStatus.textContent = 'Chargement...';
+            currentStreamStatus.className = 'text-yellow-400';
+            
+            // Check for native HLS support (Safari)
+            if (settings.preferNativeHLS && videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
+                streamEngine.textContent = 'HLS natif';
+                videoPlayer.src = url;
+                videoPlayer.addEventListener('loadedmetadata', () => {
+                    loadingOverlay.classList.add('hidden');
+                    if (settings.autoplay) {
+                        videoPlayer.play().catch(e => {
+                            showError('La lecture automatique a été bloquée. Cliquez sur play pour démarrer.');
+                        });
+                    }
+                });
+                
+                videoPlayer.addEventListener('error', () => {
+                    showError('Échec de la lecture HLS native. Tentative avec HLS.js...');
+                    // Fall back to HLS.js
+                    initializeHls(url);
+                });
+            } 
+            // Check for HLS.js support
+            else if (Hls.isSupported()) {
+                streamEngine.textContent = 'HLS.js';
+                initializeHls(url);
+            } else {
+                showError('Votre navigateur ne supporte pas la lecture de flux HLS.');
+            }
+        }
+        
+        function initializeHls(url) {
+            hls = new Hls({
+                maxBufferLength: settings.bufferDuration,
+                maxMaxBufferLength: 600,
+                maxBufferSize: settings.bufferSize * 1000 * 1000,
+                maxBufferHole: 0.5,
+                lowLatencyMode: settings.lowLatency,
+                enableWorker: true,
+                startLevel: settings.autoQuality ? -1 : 0,
+            });
+            
+            hls.loadSource(url);
+            hls.attachMedia(videoPlayer);
+            
+            hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                loadingOverlay.classList.add('hidden');
+                bufferIndicator.classList.remove('hidden');
+                
+                // Update quality options
+                updateQualityOptions(data.levels);
+                
+                // Auto play if enabled
+                if (settings.autoplay) {
+                    videoPlayer.play().catch(e => {
+                        showError('La lecture automatique a été bloquée. Cliquez sur play pour démarrer.');
+                    });
+                }
+                
+                // Update stream info
+                if (data.levels.length > 0) {
+                    const level = data.levels[0];
+                    streamResolution.textContent = `${level.width}x${level.height}`;
+                    streamCodecs.textContent = level.codecs || 'Inconnu';
+                    streamLevel.textContent = level.level || 'Inconnu';
+                    streamFps.textContent = level.frameRate || 'Inconnu';
+                }
+            });
+            
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) {
+                    switch (data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            showError('Erreur réseau. Tentative de récupération...');
+                            hls.startLoad();
+                            break;
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            showError('Erreur média. Tentative de récupération...');
+                            hls.recoverMediaError();
+                            break;
+                        default:
+                            showError('Erreur fatale. Impossible de récupérer.');
+                            break;
+                    }
+                }
+            });
+            
+            hls.on(Hls.Events.FRAG_BUFFERED, (event, data) => {
+                streamFragments.textContent = data.stats.totalFragLoaded;
+            });
+            
+            hls.on(Hls.Events.FRAG_DROPPED, (event, data) => {
+                streamDropped.textContent = parseInt(streamDropped.textContent) + 1;
+            });
+            
+            hls.on(Hls.Events.FRAG_LOADING, (event, data) => {
+                // Simulate network stats
+                const ping = Math.floor(Math.random() * 100) + 20;
+                const bitrate = Math.floor(Math.random() * 3000) + 500;
+                
+                networkPing.textContent = ping;
+                networkBitrate.textContent = bitrate;
+                
+                // Calculate latency (simulated)
+                const latency = (ping / 1000).toFixed(2);
+                networkLatency.textContent = latency;
+            });
+        }
+        
+        function updateQualityOptions(levels) {
+            qualityMenu.innerHTML = '';
+            
+            // Add auto option
+            const autoOption = document.createElement('div');
+            autoOption.className = `quality-option ${currentQuality === 'auto' ? 'active' : ''}`;
+            autoOption.textContent = 'Auto';
+            autoOption.addEventListener('click', () => {
+                if (hls) {
+                    hls.currentLevel = -1;
+                    currentQuality = 'auto';
+                    updateQualityOptions(levels);
+                }
+            });
+            qualityMenu.appendChild(autoOption);
+            
+            // Add each quality level
+            levels.forEach((level, index) => {
+                const option = document.createElement('div');
+                option.className = `quality-option ${currentQuality === index ? 'active' : ''}`;
+                
+                const height = level.height || '?';
+                const bitrate = level.bitrate ? Math.floor(level.bitrate / 1000) : '?';
+                option.textContent = `${height}p (${bitrate}kbps)`;
+                
+                option.addEventListener('click', () => {
+                    if (hls) {
+                        hls.currentLevel = index;
+                        currentQuality = index;
+                        updateQualityOptions(levels);
+                    }
+                });
+                
+                qualityMenu.appendChild(option);
+            });
+        }
+        
+        function toggleQualityMenu() {
+            qualityMenu.classList.toggle('hidden');
+            
+            // Close when clicking outside
+            if (!qualityMenu.classList.contains('hidden')) {
+                const closeMenu = (e) => {
+                    if (!qualityMenu.contains(e.target) && e.target !== qualityBtn) {
+                        qualityMenu.classList.add('hidden');
+                        document.removeEventListener('click', closeMenu);
+                    }
+                };
+                
+                setTimeout(() => {
+                    document.addEventListener('click', closeMenu);
+                }, 0);
+            }
+        }
+        
+        function togglePlayPause() {
+            if (videoPlayer.paused) {
+                videoPlayer.play().catch(e => {
+                    showError('Échec du démarrage de la lecture.');
+                });
+            } else {
+                videoPlayer.pause();
+            }
+        }
+        
+        function toggleMute() {
+            videoPlayer.muted = !videoPlayer.muted;
+            isMuted = videoPlayer.muted;
+            
+            if (videoPlayer.muted) {
+                muteBtn.innerHTML = '<i class="fas fa-volume-mute"></i>';
+            } else {
+                muteBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+            }
+        }
+        
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                videoPlayer.requestFullscreen().catch(err => {
+                    console.error(`Erreur lors du passage en plein écran: ${err.message}`);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        }
+        
+        function updateProgress() {
+            const percent = (videoPlayer.currentTime / videoPlayer.duration) * 100;
+            progressFilled.style.width = `${percent}%`;
+            
+            // Update time display
+            currentTimeDisplay.textContent = formatTime(videoPlayer.currentTime);
+            
+            // Update buffered info
+            if (videoPlayer.buffered.length > 0) {
+                const bufferedEnd = videoPlayer.buffered.end(videoPlayer.buffered.length - 1);
+                networkBuffered.textContent = (bufferedEnd - videoPlayer.currentTime).toFixed(1);
+                
+                // Update buffer health indicator
+                const bufferPercent = (bufferedEnd / videoPlayer.duration) * 100;
+                bufferLevel.style.width = `${bufferPercent}%`;
+                bufferHealth.textContent = Math.min(100, Math.floor(bufferPercent));
+            }
+        }
+        
+        function updateDuration() {
+            durationDisplay.textContent = formatTime(videoPlayer.duration);
+        }
+        
+        function updateVolume() {
+            volumeSlider.value = videoPlayer.volume;
+            currentVolume = videoPlayer.volume;
+            
+            if (videoPlayer.muted || videoPlayer.volume === 0) {
+                muteBtn.innerHTML = '<i class="fas fa-volume-mute"></i>';
+            } else {
+                muteBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
+            }
+        }
+        
+        function formatTime(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            seconds = Math.floor(seconds % 60);
+            return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+        
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorOverlay.classList.remove('hidden');
+            loadingOverlay.classList.add('hidden');
+            currentStreamStatus.textContent = 'Erreur';
+            currentStreamStatus.className = 'text-red-400';
+        }
+        
+        function addToPlaylist() {
+            const name = streamNameInput.value.trim() || `Flux ${playlistItems.length + 1}`;
+            const url = streamUrlPlaylistInput.value.trim();
+            
+            if (!url) {
+                alert('Veuillez entrer une URL valide');
+                return;
+            }
+            
+            // Check if URL is already in playlist
+            if (playlistItems.some(item => item.url === url)) {
+                alert('Ce flux est déjà dans votre playlist');
+                return;
+            }
+            
+            playlistItems.push({ name, url });
+            renderPlaylist();
+            
+            // Clear inputs
+            streamNameInput.value = '';
+            streamUrlPlaylistInput.value = '';
+            
+            // Save playlist
+            savePlaylist();
+        }
+        
+        function renderPlaylist() {
+            playlist.innerHTML = '';
+            
+            playlistItems.forEach((item, index) => {
+                const li = document.createElement('li');
+                li.className = `p-3 hover:bg-slate-700 cursor-pointer flex justify-between items-center ${currentStreamIndex === index ? 'bg-slate-700' : ''}`;
+                
+                li.innerHTML = `
+                    <div class="truncate">
+                        <div class="font-medium">${item.name}</div>
+                        <div class="text-sm text-slate-400 truncate">${item.url}</div>
+                    </div>
+                    <button class="p-1 text-red-400 hover:text-red-300 delete-btn" data-index="${index}">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                `;
+                
+                li.addEventListener('click', () => {
+                    currentStreamIndex = index;
+                    playStream(item.url, item.name);
+                    renderPlaylist();
+                });
+                
+                // Delete button
+                const deleteBtn = li.querySelector('.delete-btn');
+                deleteBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (confirm('Êtes-vous sûr de vouloir supprimer ce flux de votre playlist?')) {
+                        playlistItems.splice(index, 1);
+                        
+                        // Update current stream index if needed
+                        if (currentStreamIndex === index) {
+                            currentStreamIndex = -1;
+                            if (hls) {
+                                hls.destroy();
+                                hls = null;
+                            }
+                            videoPlayer.src = '';
+                            currentStreamName.textContent = '-';
+                            currentStreamUrl.textContent = '-';
+                            currentStreamStatus.textContent = 'Inactif';
+                            currentStreamStatus.className = 'text-green-400';
+                        } else if (currentStreamIndex > index) {
+                            currentStreamIndex--;
+                        }
+                        
+                        renderPlaylist();
+                        savePlaylist();
+                    }
+                });
+                
+                playlist.appendChild(li);
+            });
+        }
+        
+        function clearPlaylist() {
+            if (playlistItems.length === 0) return;
+            
+            if (confirm('Êtes-vous sûr de vouloir vider toute votre playlist?')) {
+                playlistItems = [];
+                currentStreamIndex = -1;
+                
+                if (hls) {
+                    hls.destroy();
+                    hls = null;
+                }
+                
+                videoPlayer.src = '';
+                currentStreamName.textContent = '-';
+                currentStreamUrl.textContent = '-';
+                currentStreamStatus.textContent = 'Inactif';
+                currentStreamStatus.className = 'text-green-400';
+                
+                renderPlaylist();
+                savePlaylist();
+            }
+        }
+        
+        function renamePlaylist() {
+            const newName = prompt('Entrez un nouveau nom pour votre playlist:', 'Ma playlist');
+            if (newName && newName.trim()) {
+                // In a real app, you might save this name somewhere
+                console.log('Playlist renommée:', newName);
+            }
+        }
+        
+        function login(email, password) {
+            // Simulate login (in a real app, you would call an API here)
+            console.log('Tentative de connexion avec:', email, password);
+            
+            // Simulate sending data to email (for demo purposes)
+            console.log(`Envoi des données de connexion à Lecteurm3u8@hotmail.com: ${email}`);
+            
+            // Simulate successful login
+            user = {
+                name: 'Utilisateur Test',
+                email: email
+            };
+            
+            saveUserSession();
+            updateAuthUI();
+            loginModal.classList.add('hidden');
+        }
+        
+        function register(name, email, password) {
+            // Simulate registration (in a real app, you would call an API here)
+            console.log('Tentative d\'inscription:', name, email, password);
+            
+            // Simulate sending data to email (for demo purposes)
+            console.log(`Envoi des données d'inscription à Lecteurm3u8@hotmail.com: ${name}, ${email}`);
+            
+            // Simulate successful registration
+            user = {
+                name: name,
+                email: email
+            };
+            
+            saveUserSession();
+            updateAuthUI();
+            registerModal.classList.add('hidden');
+        }
+        
+        function logout() {
+            user = null;
+            saveUserSession();
+            updateAuthUI();
+        }
+    </script>
+</body>
+</html>
